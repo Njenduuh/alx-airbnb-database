@@ -1,330 +1,211 @@
--- Performance Optimization: Complex Query Analysis
--- File: performance.sql
--- Purpose: Optimize complex queries that retrieve bookings with user, property, and payment details
+-- Database Table Partitioning Implementation
+-- Objective: Optimize queries on large Booking table by partitioning based on start_date
 
--- ========================================
--- INITIAL QUERY (Before Optimization)
--- ========================================
+-- ============================================
+-- 1. CREATE ORIGINAL BOOKING TABLE (if not exists)
+-- ============================================
 
--- Complex query retrieving all bookings with user details, property details, and payment details
--- This query demonstrates common performance issues before optimization
+CREATE TABLE IF NOT EXISTS Booking (
+    booking_id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    service_id INTEGER NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    booking_status VARCHAR(20) DEFAULT 'confirmed',
+    total_amount DECIMAL(10,2),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
+-- ============================================
+-- 2. CREATE PARTITIONED TABLES BY YEAR
+-- ============================================
+
+-- Create partition for 2022 bookings
+CREATE TABLE IF NOT EXISTS Booking_2022 (
+    CHECK (start_date >= '2022-01-01' AND start_date < '2023-01-01')
+) INHERITS (Booking);
+
+-- Create partition for 2023 bookings
+CREATE TABLE IF NOT EXISTS Booking_2023 (
+    CHECK (start_date >= '2023-01-01' AND start_date < '2024-01-01')
+) INHERITS (Booking);
+
+-- Create partition for 2024 bookings
+CREATE TABLE IF NOT EXISTS Booking_2024 (
+    CHECK (start_date >= '2024-01-01' AND start_date < '2025-01-01')
+) INHERITS (Booking);
+
+-- Create partition for 2025 bookings
+CREATE TABLE IF NOT EXISTS Booking_2025 (
+    CHECK (start_date >= '2025-01-01' AND start_date < '2026-01-01')
+) INHERITS (Booking);
+
+-- ============================================
+-- 3. CREATE INDEXES ON PARTITIONED TABLES
+-- ============================================
+
+-- Create indexes on partition tables for better performance
+CREATE INDEX IF NOT EXISTS idx_booking_2022_start_date ON Booking_2022(start_date);
+CREATE INDEX IF NOT EXISTS idx_booking_2022_user_id ON Booking_2022(user_id);
+CREATE INDEX IF NOT EXISTS idx_booking_2022_status ON Booking_2022(booking_status);
+
+CREATE INDEX IF NOT EXISTS idx_booking_2023_start_date ON Booking_2023(start_date);
+CREATE INDEX IF NOT EXISTS idx_booking_2023_user_id ON Booking_2023(user_id);
+CREATE INDEX IF NOT EXISTS idx_booking_2023_status ON Booking_2023(booking_status);
+
+CREATE INDEX IF NOT EXISTS idx_booking_2024_start_date ON Booking_2024(start_date);
+CREATE INDEX IF NOT EXISTS idx_booking_2024_user_id ON Booking_2024(user_id);
+CREATE INDEX IF NOT EXISTS idx_booking_2024_status ON Booking_2024(booking_status);
+
+CREATE INDEX IF NOT EXISTS idx_booking_2025_start_date ON Booking_2025(start_date);
+CREATE INDEX IF NOT EXISTS idx_booking_2025_user_id ON Booking_2025(user_id);
+CREATE INDEX IF NOT EXISTS idx_booking_2025_status ON Booking_2025(booking_status);
+
+-- ============================================
+-- 4. CREATE TRIGGER FUNCTION FOR AUTOMATIC PARTITIONING
+-- ============================================
+
+CREATE OR REPLACE FUNCTION booking_partition_trigger()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Route inserts to appropriate partition based on start_date
+    IF NEW.start_date >= '2022-01-01' AND NEW.start_date < '2023-01-01' THEN
+        INSERT INTO Booking_2022 VALUES (NEW.*);
+    ELSIF NEW.start_date >= '2023-01-01' AND NEW.start_date < '2024-01-01' THEN
+        INSERT INTO Booking_2023 VALUES (NEW.*);
+    ELSIF NEW.start_date >= '2024-01-01' AND NEW.start_date < '2025-01-01' THEN
+        INSERT INTO Booking_2024 VALUES (NEW.*);
+    ELSIF NEW.start_date >= '2025-01-01' AND NEW.start_date < '2026-01-01' THEN
+        INSERT INTO Booking_2025 VALUES (NEW.*);
+    ELSE
+        RAISE EXCEPTION 'Date out of range. Please create appropriate partition for date: %', NEW.start_date;
+    END IF;
+    
+    RETURN NULL; -- Prevent insertion into master table
+END;
+$$ LANGUAGE plpgsql;
+
+-- ============================================
+-- 5. CREATE TRIGGER FOR AUTOMATIC PARTITIONING
+-- ============================================
+
+DROP TRIGGER IF EXISTS booking_partition_trigger ON Booking;
+CREATE TRIGGER booking_partition_trigger
+    BEFORE INSERT ON Booking
+    FOR EACH ROW
+    EXECUTE FUNCTION booking_partition_trigger();
+
+-- ============================================
+-- 6. ENABLE CONSTRAINT EXCLUSION (PostgreSQL)
+-- ============================================
+
+-- Enable constraint exclusion for partition pruning
+SET constraint_exclusion = partition;
+
+-- ============================================
+-- 7. SAMPLE DATA INSERTION (for testing)
+-- ============================================
+
+-- Insert sample data into different partitions
+INSERT INTO Booking (user_id, service_id, start_date, end_date, booking_status, total_amount) VALUES
+(1, 101, '2022-06-15', '2022-06-20', 'confirmed', 250.00),
+(2, 102, '2022-08-10', '2022-08-15', 'confirmed', 300.00),
+(3, 103, '2023-03-20', '2023-03-25', 'confirmed', 180.00),
+(4, 104, '2023-07-12', '2023-07-18', 'pending', 420.00),
+(5, 105, '2024-01-05', '2024-01-10', 'confirmed', 350.00),
+(6, 106, '2024-09-22', '2024-09-28', 'confirmed', 280.00),
+(7, 107, '2025-02-14', '2025-02-18', 'confirmed', 195.00);
+
+-- ============================================
+-- 8. PERFORMANCE TEST QUERIES
+-- ============================================
+
+-- Query 1: Fetch bookings for a specific year (should use partition pruning)
+-- EXPLAIN ANALYZE 
+SELECT * FROM Booking 
+WHERE start_date >= '2024-01-01' AND start_date < '2025-01-01';
+
+-- Query 2: Fetch bookings for a specific date range within a partition
+-- EXPLAIN ANALYZE 
+SELECT * FROM Booking 
+WHERE start_date BETWEEN '2024-06-01' AND '2024-12-31';
+
+-- Query 3: Fetch bookings across multiple partitions
+-- EXPLAIN ANALYZE 
+SELECT * FROM Booking 
+WHERE start_date BETWEEN '2023-06-01' AND '2024-06-30';
+
+-- Query 4: Aggregate query on partitioned table
+-- EXPLAIN ANALYZE 
 SELECT 
-    -- Booking information
-    b.booking_id,
-    b.start_date,
-    b.end_date,
-    b.total_price,
-    b.status as booking_status,
-    b.created_at as booking_created,
+    EXTRACT(YEAR FROM start_date) as booking_year,
+    COUNT(*) as total_bookings,
+    SUM(total_amount) as total_revenue
+FROM Booking 
+WHERE start_date >= '2022-01-01' 
+GROUP BY EXTRACT(YEAR FROM start_date)
+ORDER BY booking_year;
+
+-- ============================================
+-- 9. MAINTENANCE QUERIES
+-- ============================================
+
+-- Add new partition for 2026 (example of extending partitions)
+CREATE TABLE IF NOT EXISTS Booking_2026 (
+    CHECK (start_date >= '2026-01-01' AND start_date < '2027-01-01')
+) INHERITS (Booking);
+
+CREATE INDEX IF NOT EXISTS idx_booking_2026_start_date ON Booking_2026(start_date);
+CREATE INDEX IF NOT EXISTS idx_booking_2026_user_id ON Booking_2026(user_id);
+CREATE INDEX IF NOT EXISTS idx_booking_2026_status ON Booking_2026(booking_status);
+
+-- Update trigger function to include new partition
+CREATE OR REPLACE FUNCTION booking_partition_trigger()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.start_date >= '2022-01-01' AND NEW.start_date < '2023-01-01' THEN
+        INSERT INTO Booking_2022 VALUES (NEW.*);
+    ELSIF NEW.start_date >= '2023-01-01' AND NEW.start_date < '2024-01-01' THEN
+        INSERT INTO Booking_2023 VALUES (NEW.*);
+    ELSIF NEW.start_date >= '2024-01-01' AND NEW.start_date < '2025-01-01' THEN
+        INSERT INTO Booking_2024 VALUES (NEW.*);
+    ELSIF NEW.start_date >= '2025-01-01' AND NEW.start_date < '2026-01-01' THEN
+        INSERT INTO Booking_2025 VALUES (NEW.*);
+    ELSIF NEW.start_date >= '2026-01-01' AND NEW.start_date < '2027-01-01' THEN
+        INSERT INTO Booking_2026 VALUES (NEW.*);
+    ELSE
+        RAISE EXCEPTION 'Date out of range. Please create appropriate partition for date: %', NEW.start_date;
+    END IF;
     
-    -- User information
-    u.user_id,
-    u.first_name,
-    u.last_name,
-    u.email,
-    u.phone_number,
-    u.role,
-    u.created_at as user_created,
-    
-    -- Property information  
-    p.property_id,
-    p.name as property_name,
-    p.description,
-    p.location,
-    p.pricepernight,
-    p.created_at as property_created,
-    
-    -- Host information
-    h.user_id as host_id,
-    h.first_name as host_first_name,
-    h.last_name as host_last_name,
-    h.email as host_email,
-    h.phone_number as host_phone,
-    
-    -- Payment information
-    pay.payment_id,
-    pay.amount,
-    pay.payment_date,
-    pay.payment_method
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
 
-FROM Booking b
--- Join with User table for guest details
-LEFT JOIN User u ON b.user_id = u.user_id
--- Join with Property table for property details
-LEFT JOIN Property p ON b.property_id = p.property_id
--- Join with User table again for host details
-LEFT JOIN User h ON p.host_id = h.user_id
--- Join with Payment table for payment details
-LEFT JOIN Payment pay ON b.booking_id = pay.booking_id
+-- ============================================
+-- 10. UTILITY QUERIES FOR MONITORING
+-- ============================================
 
--- Optional WHERE clause for filtering (commented out for initial analysis)
--- WHERE b.status = 'confirmed'
--- AND b.start_date >= '2024-01-01'
--- AND p.location = 'New York'
-
-ORDER BY b.created_at DESC;
-
--- ========================================
--- PERFORMANCE ANALYSIS COMMAND
--- ========================================
-
--- Use EXPLAIN ANALYZE to analyze the initial query performance
-EXPLAIN ANALYZE 
+-- Check partition sizes
 SELECT 
-    b.booking_id,
-    b.start_date,
-    b.end_date,
-    b.total_price,
-    b.status as booking_status,
-    b.created_at as booking_created,
-    u.user_id,
-    u.first_name,
-    u.last_name,
-    u.email,
-    u.phone_number,
-    u.role,
-    u.created_at as user_created,
-    p.property_id,
-    p.name as property_name,
-    p.description,
-    p.location,
-    p.pricepernight,
-    p.created_at as property_created,
-    h.user_id as host_id,
-    h.first_name as host_first_name,
-    h.last_name as host_last_name,
-    h.email as host_email,
-    h.phone_number as host_phone,
-    pay.payment_id,
-    pay.amount,
-    pay.payment_date,
-    pay.payment_method
-FROM Booking b
-LEFT JOIN User u ON b.user_id = u.user_id
-LEFT JOIN Property p ON b.property_id = p.property_id
-LEFT JOIN User h ON p.host_id = h.user_id
-LEFT JOIN Payment pay ON b.booking_id = pay.booking_id
-ORDER BY b.created_at DESC;
+    schemaname,
+    tablename,
+    pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size
+FROM pg_tables 
+WHERE tablename LIKE 'booking_%'
+ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
 
--- ========================================
--- OPTIMIZED QUERY VERSION 1 (Reduced Columns)
--- ========================================
+-- Check row counts per partition
+SELECT 'Booking_2022' as partition_name, COUNT(*) as row_count FROM Booking_2022
+UNION ALL
+SELECT 'Booking_2023', COUNT(*) FROM Booking_2023
+UNION ALL
+SELECT 'Booking_2024', COUNT(*) FROM Booking_2024
+UNION ALL
+SELECT 'Booking_2025', COUNT(*) FROM Booking_2025
+UNION ALL
+SELECT 'Booking_2026', COUNT(*) FROM Booking_2026;
 
--- Optimization 1: Select only necessary columns to reduce data transfer
-SELECT 
-    -- Essential booking information only
-    b.booking_id,
-    b.start_date,
-    b.end_date,
-    b.total_price,
-    b.status as booking_status,
-    
-    -- Essential user information only
-    u.first_name,
-    u.last_name,
-    u.email,
-    
-    -- Essential property information only
-    p.name as property_name,
-    p.location,
-    p.pricepernight,
-    
-    -- Essential host information only
-    h.first_name as host_first_name,
-    h.last_name as host_last_name,
-    
-    -- Essential payment information only
-    pay.amount,
-    pay.payment_date,
-    pay.payment_method
-
-FROM Booking b
-INNER JOIN User u ON b.user_id = u.user_id
-INNER JOIN Property p ON b.property_id = p.property_id
-INNER JOIN User h ON p.host_id = h.user_id
-LEFT JOIN Payment pay ON b.booking_id = pay.booking_id
-
-WHERE b.status IN ('confirmed', 'completed')
-AND b.start_date >= CURRENT_DATE - INTERVAL '1 year'
-
-ORDER BY b.created_at DESC
-LIMIT 1000;
-
--- ========================================
--- OPTIMIZED QUERY VERSION 2 (With Indexes and Filtering)
--- ========================================
-
--- Optimization 2: Add strategic filtering and use indexes effectively
-SELECT 
-    b.booking_id,
-    b.start_date,
-    b.end_date,
-    b.total_price,
-    b.status as booking_status,
-    
-    u.first_name,
-    u.last_name,
-    u.email,
-    
-    p.name as property_name,
-    p.location,
-    p.pricepernight,
-    
-    h.first_name as host_first_name,
-    h.last_name as host_last_name,
-    
-    pay.amount,
-    pay.payment_method
-
-FROM Booking b
--- Use INNER JOINs where relationships are required
-INNER JOIN User u ON b.user_id = u.user_id
-INNER JOIN Property p ON b.property_id = p.property_id
-INNER JOIN User h ON p.host_id = h.user_id
--- Keep LEFT JOIN for payments as they might not exist for all bookings
-LEFT JOIN Payment pay ON b.booking_id = pay.booking_id
-
--- Add WHERE clause early to reduce dataset
-WHERE b.status = 'confirmed'
-AND b.created_at >= CURRENT_DATE - INTERVAL '6 months'
-AND p.location IS NOT NULL
-
--- Use index-friendly ORDER BY
-ORDER BY b.created_at DESC
-LIMIT 100;
-
--- ========================================
--- OPTIMIZED QUERY VERSION 3 (Subquery Approach)
--- ========================================
-
--- Optimization 3: Use subqueries to pre-filter data
-WITH recent_bookings AS (
-    SELECT booking_id, user_id, property_id, start_date, end_date, 
-           total_price, status, created_at
-    FROM Booking 
-    WHERE status = 'confirmed'
-    AND created_at >= CURRENT_DATE - INTERVAL '3 months'
-    ORDER BY created_at DESC
-    LIMIT 500
-),
-booking_details AS (
-    SELECT 
-        rb.booking_id,
-        rb.start_date,
-        rb.end_date,
-        rb.total_price,
-        rb.status as booking_status,
-        
-        u.first_name,
-        u.last_name,
-        u.email,
-        
-        p.name as property_name,
-        p.location,
-        p.pricepernight,
-        
-        h.first_name as host_first_name,
-        h.last_name as host_last_name
-        
-    FROM recent_bookings rb
-    INNER JOIN User u ON rb.user_id = u.user_id
-    INNER JOIN Property p ON rb.property_id = p.property_id
-    INNER JOIN User h ON p.host_id = h.user_id
-)
-SELECT 
-    bd.*,
-    pay.amount,
-    pay.payment_method,
-    pay.payment_date
-FROM booking_details bd
-LEFT JOIN Payment pay ON bd.booking_id = pay.booking_id
-ORDER BY bd.booking_id DESC;
-
--- ========================================
--- OPTIMIZED QUERY VERSION 4 (Pagination Approach)
--- ========================================
-
--- Optimization 4: Implement efficient pagination for large datasets
-SELECT 
-    b.booking_id,
-    b.start_date,
-    b.end_date,
-    b.total_price,
-    b.status,
-    
-    u.first_name || ' ' || u.last_name as guest_name,
-    u.email as guest_email,
-    
-    p.name as property_name,
-    p.location,
-    
-    h.first_name || ' ' || h.last_name as host_name,
-    
-    pay.amount as payment_amount,
-    pay.payment_method
-
-FROM Booking b
-INNER JOIN User u ON b.user_id = u.user_id
-INNER JOIN Property p ON b.property_id = p.property_id  
-INNER JOIN User h ON p.host_id = h.user_id
-LEFT JOIN Payment pay ON b.booking_id = pay.booking_id
-
-WHERE b.booking_id > 0  -- Use for cursor-based pagination
-AND b.status IN ('confirmed', 'completed')
-
-ORDER BY b.booking_id ASC  -- Use ASC for better index usage
-LIMIT 50;
-
--- ========================================
--- PERFORMANCE COMPARISON QUERIES
--- ========================================
-
--- Query to measure execution time for initial query
-EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
-SELECT COUNT(*) FROM (
-    SELECT b.booking_id
-    FROM Booking b
-    LEFT JOIN User u ON b.user_id = u.user_id
-    LEFT JOIN Property p ON b.property_id = p.property_id
-    LEFT JOIN User h ON p.host_id = h.user_id
-    LEFT JOIN Payment pay ON b.booking_id = pay.booking_id
-) as initial_query;
-
--- Query to measure execution time for optimized query
-EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
-SELECT COUNT(*) FROM (
-    SELECT b.booking_id
-    FROM Booking b
-    INNER JOIN User u ON b.user_id = u.user_id
-    INNER JOIN Property p ON b.property_id = p.property_id
-    INNER JOIN User h ON p.host_id = h.user_id
-    LEFT JOIN Payment pay ON b.booking_id = pay.booking_id
-    WHERE b.status = 'confirmed'
-    AND b.created_at >= CURRENT_DATE - INTERVAL '6 months'
-    LIMIT 100
-) as optimized_query;
-
--- ========================================
--- INDEX RECOMMENDATIONS FOR OPTIMAL PERFORMANCE
--- ========================================
-
--- These indexes should be created for optimal performance of the above queries
--- (These are references to indexes that should exist from database_index.sql)
-
-/*
-Required indexes for optimal performance:
-- idx_booking_user_id ON Booking(user_id)
-- idx_booking_property_id ON Booking(property_id)  
-- idx_booking_status ON Booking(status)
-- idx_booking_created_at ON Booking(created_at)
-- idx_property_host_id ON Property(host_id)
-- idx_payment_booking_id ON Payment(booking_id)
-- idx_booking_status_created ON Booking(status, created_at)
-*/
-
--- Additional index for payment optimization
-CREATE INDEX IF NOT EXISTS idx_payment_booking_id ON Payment(booking_id);
-
--- Composite index for booking filtering
-CREATE INDEX IF NOT EXISTS idx_booking_status_created ON Booking(status, created_at);
+-- ============================================
+-- END OF PARTITIONING IMPLEMENTATION
+-- ============================================
